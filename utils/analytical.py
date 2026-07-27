@@ -57,19 +57,23 @@ def parse_function_string(func_str: str) -> Tuple[sp.Expr, sp.Symbol]:
 
 
 def format_num(val: float, decimal_places: int = 4) -> str:
-    """Format float cleanly (e.g. 3.0 -> 3, 3.1230 -> 3.123)"""
+    """Format float cleanly to maximum specified decimal places (e.g. 3.0 -> 3, 0.87340000 -> 0.8734)"""
     if abs(val - round(val)) < 1e-9:
         return str(int(round(val)))
-    return f"{val:.{decimal_places}f}".rstrip('0').rstrip('.')
+    formatted = f"{val:.{decimal_places}f}".rstrip('0').rstrip('.')
+    return formatted
 
 
 def get_step_by_step_eval(expr: sp.Expr, x_sym: sp.Symbol, val: float, decimal_places: int = 4) -> str:
-    """Helper function to format step-by-step substitution into latex without excessive zeros"""
+    """Helper function to format step-by-step substitution into latex capped at decimal_places"""
     clean_val = format_num(val, decimal_places)
     
-    val_sym = sp.sympify(clean_val)
-    sub_expr = expr.subs(x_sym, sp.Symbol(f"({val_sym})"))
+    # Round numbers inside symbolic evaluation to avoid huge float precision outputs from SymPy
+    sub_expr = expr.subs(x_sym, sp.Symbol(f"({clean_val})"))
     sub_latex = sp.latex(sub_expr)
+    
+    # Force float precision rounding up to 4 decimal places inside LaTeX output strings
+    sub_latex = re.sub(r'\d+\.\d{5,}', lambda m: format_num(float(m.group(0)), decimal_places), sub_latex)
     
     final_val = float(expr.subs(x_sym, val).evalf())
     clean_final = format_num(final_val, decimal_places)
@@ -89,7 +93,6 @@ def get_prime_notation(order: int) -> str:
     4 -> ^{iv}
     5 -> ^{v}
     6 -> ^{vi}
-    ...
     """
     if order == 1:
         return "'"
@@ -98,7 +101,6 @@ def get_prime_notation(order: int) -> str:
     elif order == 3:
         return "'''"
     
-    # Roman numeral conversion for 4 and above
     val_map = [
         (10, 'x'), (9, 'ix'), (5, 'v'), (4, 'iv'), (1, 'i')
     ]
