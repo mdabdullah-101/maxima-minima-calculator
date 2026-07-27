@@ -56,17 +56,59 @@ def parse_function_string(func_str: str) -> Tuple[sp.Expr, sp.Symbol]:
     return expr, var
 
 
-def get_step_by_step_eval(expr: sp.Expr, x_sym: sp.Symbol, val: float) -> str:
-    """Helper function to format step-by-step substitution into latex"""
-    val_sym = sp.sympify(val)
+def format_num(val: float, decimal_places: int = 4) -> str:
+    """Format float cleanly (e.g. 3.0 -> 3, 3.1230 -> 3.123)"""
+    if abs(val - round(val)) < 1e-9:
+        return str(int(round(val)))
+    return f"{val:.{decimal_places}f}".rstrip('0').rstrip('.')
+
+
+def get_step_by_step_eval(expr: sp.Expr, x_sym: sp.Symbol, val: float, decimal_places: int = 4) -> str:
+    """Helper function to format step-by-step substitution into latex without excessive zeros"""
+    clean_val = format_num(val, decimal_places)
+    
+    val_sym = sp.sympify(clean_val)
     sub_expr = expr.subs(x_sym, sp.Symbol(f"({val_sym})"))
     sub_latex = sp.latex(sub_expr)
+    
     final_val = float(expr.subs(x_sym, val).evalf())
+    clean_final = format_num(final_val, decimal_places)
     
     if expr.is_number or sub_latex == sp.latex(expr):
-        return f"{final_val:.4f}"
+        return clean_final
     
-    return f"{sub_latex} = {final_val:.4f}"
+    return f"{sub_latex} = {clean_final}"
+
+
+def get_prime_notation(order: int) -> str:
+    """
+    Convert order integer into primes or superscript roman numerals:
+    1 -> '
+    2 -> ''
+    3 -> '''
+    4 -> ^{iv}
+    5 -> ^{v}
+    6 -> ^{vi}
+    ...
+    """
+    if order == 1:
+        return "'"
+    elif order == 2:
+        return "''"
+    elif order == 3:
+        return "'''"
+    
+    # Roman numeral conversion for 4 and above
+    val_map = [
+        (10, 'x'), (9, 'ix'), (5, 'v'), (4, 'iv'), (1, 'i')
+    ]
+    num = order
+    roman = ""
+    for v, r in val_map:
+        while num >= v:
+            roman += r
+            num -= v
+    return f"^{{{roman}}}"
 
 
 def analyze_function(func_str: str, decimal_places: int = 4) -> AnalyticalResult:
@@ -126,7 +168,7 @@ def analyze_function(func_str: str, decimal_places: int = 4) -> AnalyticalResult
     if factored_f1 != f1:
         solve_steps_text += f"$$\\implies {sp.latex(factored_f1)} = 0$$\n\n"
 
-    roots_str_list = [f"{sym_name} = {sp.latex(sp.sympify(r))}" for r in real_roots]
+    roots_str_list = [f"{sym_name} = {format_num(r, decimal_places)}" for r in real_roots]
     solve_steps_text += f"$$\\implies " + " \\text{ or } ".join(roots_str_list) + "$$\n\n"
     solve_steps_text += f"$$\\therefore \\text{{The critical points are }} " + " \\text{ and } ".join(roots_str_list) + "$$"
 
@@ -135,7 +177,7 @@ def analyze_function(func_str: str, decimal_places: int = 4) -> AnalyticalResult
         "content": solve_steps_text
     })
 
-    # Step 4: Second Derivative Test
+    # Step 4: Second Derivative Test & Higher Order Analysis
     f2 = sp.diff(f1, x)
     f2_terms = f1.as_ordered_terms() if isinstance(f1, sp.Add) else [f1]
     f2_diff_terms = " + ".join([f"\\frac{{d}}{{d{sym_name}}}\\left({sp.latex(t)}\\right)" for t in f2_terms]).replace("+ -", "- ")
@@ -154,19 +196,20 @@ def analyze_function(func_str: str, decimal_places: int = 4) -> AnalyticalResult
     results = []
     
     for r_val in real_roots:
+        clean_r = format_num(r_val, decimal_places)
         f2_val = float(f2.subs(x, r_val).evalf())
         fx_val = float(expr.subs(x, r_val).evalf())
-        f2_sub_step = get_step_by_step_eval(f2, x, r_val)
+        f2_sub_step = get_step_by_step_eval(f2, x, r_val, decimal_places)
 
         if f2_val < -1e-9:
             pt_type = "Maximum"
-            cond_str = f"f''({r_val}) = {f2_val:.{decimal_places}f} < 0"
-            conclusion = f"\\therefore \\text{{At }} {sym_name} = {r_val} \\text{{ the function is local maximum}}"
+            cond_str = f"f''({clean_r}) = {format_num(f2_val, decimal_places)} < 0"
+            conclusion = f"\\therefore \\text{{At }} {sym_name} = {clean_r} \\text{{ the function is local maximum}}"
             higher_order_text = ""
         elif f2_val > 1e-9:
             pt_type = "Minimum"
-            cond_str = f"f''({r_val}) = {f2_val:.{decimal_places}f} > 0"
-            conclusion = f"\\therefore \\text{{At }} {sym_name} = {r_val} \\text{{ the function is local minimum}}"
+            cond_str = f"f''({clean_r}) = {format_num(f2_val, decimal_places)} > 0"
+            conclusion = f"\\therefore \\text{{At }} {sym_name} = {clean_r} \\text{{ the function is local minimum}}"
             higher_order_text = ""
         else:
             order = 3
@@ -174,33 +217,39 @@ def analyze_function(func_str: str, decimal_places: int = 4) -> AnalyticalResult
             current_deriv = sp.diff(prev_deriv, x)
             val = float(current_deriv.subs(x, r_val).evalf())
             
-            higher_order_text = f"Since $f''({r_val}) = 0$, the second derivative test is inconclusive. We test higher-order derivatives:\n\n"
-            higher_order_text += f"$$f^{{({order})}}({sym_name}) = \\frac{{d}}{{d{sym_name}}}\\left({sp.latex(prev_deriv)}\\right) = {sp.latex(current_deriv)}$$\n\n"
-            h_sub_step = get_step_by_step_eval(current_deriv, x, r_val)
-            higher_order_text += f"$$f^{{({order})}}({r_val}) = {h_sub_step}$$\n\n"
+            higher_order_text = f"Since $f''({clean_r}) = 0$, the second derivative test is inconclusive. We test higher-order derivatives:\n\n"
+            
+            prime_symbol = get_prime_notation(order)
+            higher_order_text += f"$$f{prime_symbol}({sym_name}) = \\frac{{d}}{{d{sym_name}}}\\left({sp.latex(prev_deriv)}\\right) = {sp.latex(current_deriv)}$$\n\n"
+            h_sub_step = get_step_by_step_eval(current_deriv, x, r_val, decimal_places)
+            higher_order_text += f"$$f{prime_symbol}({clean_r}) = {h_sub_step}$$\n\n"
 
             while abs(val) < 1e-9 and order <= 10:
                 order += 1
                 prev_deriv = current_deriv
                 current_deriv = sp.diff(prev_deriv, x)
                 val = float(current_deriv.subs(x, r_val).evalf())
-                higher_order_text += f"$$f^{{({order})}}({sym_name}) = \\frac{{d}}{{d{sym_name}}}\\left({sp.latex(prev_deriv)}\\right) = {sp.latex(current_deriv)}$$\n\n"
-                h_sub_step = get_step_by_step_eval(current_deriv, x, r_val)
-                higher_order_text += f"$$f^{{({order})}}({r_val}) = {h_sub_step}$$\n\n"
+                prime_symbol = get_prime_notation(order)
+                higher_order_text += f"$$f{prime_symbol}({sym_name}) = \\frac{{d}}{{d{sym_name}}}\\left({sp.latex(prev_deriv)}\\right) = {sp.latex(current_deriv)}$$\n\n"
+                h_sub_step = get_step_by_step_eval(current_deriv, x, r_val, decimal_places)
+                higher_order_text += f"$$f{prime_symbol}({clean_r}) = {h_sub_step}$$\n\n"
+
+            prime_symbol = get_prime_notation(order)
+            clean_deriv_val = format_num(val, decimal_places)
 
             if order % 2 != 0:
                 pt_type = "Point of Inflection"
-                cond_str = f"f^{{({order})}}({r_val}) = {val:.{decimal_places}f} \\neq 0 \\quad (\\text{{First non-zero derivative is Odd order}})"
-                conclusion = f"\\therefore \\text{{At }} {sym_name} = {r_val} \\text{{ it is a Point of Inflection (neither max nor min)}}"
+                cond_str = f"f{prime_symbol}({clean_r}) = {clean_deriv_val} \\neq 0 \\quad (\\text{{First non-zero derivative is Odd order}})"
+                conclusion = f"\\therefore \\text{{At }} {sym_name} = {clean_r} \\text{{ it is a Point of Inflection (neither max nor min)}}"
             else:
                 if val < 0:
                     pt_type = "Maximum"
-                    cond_str = f"f^{{({order})}}({r_val}) = {val:.{decimal_places}f} < 0 \\quad (\\text{{First non-zero derivative is Even order}})"
-                    conclusion = f"\\therefore \\text{{At }} {sym_name} = {r_val} \\text{{ the function is local maximum}}"
+                    cond_str = f"f{prime_symbol}({clean_r}) = {clean_deriv_val} < 0 \\quad (\\text{{First non-zero derivative is Even order}})"
+                    conclusion = f"\\therefore \\text{{At }} {sym_name} = {clean_r} \\text{{ the function is local maximum}}"
                 else:
                     pt_type = "Minimum"
-                    cond_str = f"f^{{({order})}}({r_val}) = {val:.{decimal_places}f} > 0 \\quad (\\text{{First non-zero derivative is Even order}})"
-                    conclusion = f"\\therefore \\text{{At }} {sym_name} = {r_val} \\text{{ the function is local minimum}}"
+                    cond_str = f"f{prime_symbol}({clean_r}) = {clean_deriv_val} > 0 \\quad (\\text{{First non-zero derivative is Even order}})"
+                    conclusion = f"\\therefore \\text{{At }} {sym_name} = {clean_r} \\text{{ the function is local minimum}}"
 
         results.append(AnalyticalPointResult(
             x_value=round(r_val, decimal_places),
@@ -209,8 +258,8 @@ def analyze_function(func_str: str, decimal_places: int = 4) -> AnalyticalResult
             point_type=pt_type
         ))
 
-        eval_step_text += f"**For ${sym_name} = {r_val}$**\n\n"
-        eval_step_text += f"$$f''({r_val}) = {f2_sub_step}$$\n\n"
+        eval_step_text += f"**For ${sym_name} = {clean_r}$**\n\n"
+        eval_step_text += f"$$f''({clean_r}) = {f2_sub_step}$$\n\n"
         if higher_order_text:
             eval_step_text += higher_order_text
         eval_step_text += f"$${cond_str}$$\n\n"
@@ -224,15 +273,17 @@ def analyze_function(func_str: str, decimal_places: int = 4) -> AnalyticalResult
     # Step 5: Extrema Values
     step4_text = f"Substitute the ${sym_name}$ values back into the original function $f({sym_name}) = {sp.latex(expr)}$\n\n"
     for r_val in real_roots:
-        fx_sub_step = get_step_by_step_eval(expr, x, r_val)
+        clean_r = format_num(r_val, decimal_places)
+        fx_sub_step = get_step_by_step_eval(expr, x, r_val, decimal_places)
         fx_val = float(expr.subs(x, r_val).evalf())
-        p_type = [r for r in results if r.x_value == r_val][0].point_type
+        clean_fx = format_num(fx_val, decimal_places)
         
+        p_type = [r for r in results if r.x_value == r_val][0].point_type
         pt_kind = "local minimum point" if p_type == "Minimum" else ("local maximum point" if p_type == "Maximum" else "point of inflection")
 
-        step4_text += f"**At ${sym_name} = {r_val}$**\n\n"
-        step4_text += f"$$f({r_val}) = {fx_sub_step}$$\n\n"
-        step4_text += f"$$\\text{{{pt_kind}}} = ({r_val}, {fx_val:.{decimal_places}f})$$\n\n"
+        step4_text += f"**At ${sym_name} = {clean_r}$**\n\n"
+        step4_text += f"$$f({clean_r}) = {fx_sub_step}$$\n\n"
+        step4_text += f"$$\\text{{{pt_kind}}} = ({clean_r}, {clean_fx})$$\n\n"
 
     steps.append({
         "title": "Step-4: Calculate the extrema values",
